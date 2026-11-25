@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.RectF
 import android.location.Location
 import android.location.LocationListener
@@ -49,14 +50,11 @@ class MainActivity : AppCompatActivity(), LocationListener {
     private var isRain = false
     private var lastBeepTime = 0L
 
-    // Bộ lọc làm mượt khoảng cách (Moving Average)
     private val distHistory = ArrayDeque<Float>()
-
-    // ONNX Runtime Model
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    // Thông số vật lý xe (mét)
+    // Danh mục phương tiện giao thông COCO
     private val realWidths = mapOf(2 to 1.75f, 3 to 0.75f, 5 to 2.55f, 7 to 2.40f)
     private val classNames = mapOf(2 to "CAR", 3 to "MOTO", 5 to "BUS", 7 to "TRUCK")
     private val FOCAL_LENGTH = 850f
@@ -87,14 +85,14 @@ class MainActivity : AppCompatActivity(), LocationListener {
         btnSpeedDown.setOnClickListener {
             egoSpeedKmh = Math.max(0f, egoSpeedKmh - 10f)
             isLiveGPS = false
-            tvSpeed.text = "TỐC ĐỘ: ${egoSpeedKmh.toInt()} km/h (ĐIỀU CHỈNH TAY)"
+            tvSpeed.text = "TỐC ĐỘ: ${egoSpeedKmh.toInt()} km/h (MÔ PHỎNG)"
             updateLawDistance()
         }
 
         btnSpeedUp.setOnClickListener {
             egoSpeedKmh += 10f
             isLiveGPS = false
-            tvSpeed.text = "TỐC ĐỘ: ${egoSpeedKmh.toInt()} km/h (ĐIỀU CHỈNH TAY)"
+            tvSpeed.text = "TỐC ĐỘ: ${egoSpeedKmh.toInt()} km/h (MÔ PHỎNG)"
             updateLawDistance()
         }
 
@@ -114,7 +112,11 @@ class MainActivity : AppCompatActivity(), LocationListener {
         }
 
         updateLawDistance()
-        requestPermissions()
+
+        // Đảm bảo View đã tải xong mới bật Camera để góc xoay thẳng đứng 100%
+        previewView.post {
+            requestPermissions()
+        }
     }
 
     private fun loadAIModel() {
@@ -122,7 +124,10 @@ class MainActivity : AppCompatActivity(), LocationListener {
             ortEnv = OrtEnvironment.getEnvironment()
             val modelBytes = assets.open("yolov8n.onnx").readBytes()
             ortSession = ortEnv?.createSession(modelBytes)
-        } catch (e: Exception) {}
+            tvStatus.text = "AI YOLOV8: ĐÃ KÍCH HOẠT"
+        } catch (e: Exception) {
+            tvStatus.text = "LỖI TẢI AI: ${e.message}"
+        }
     }
 
     private fun requestPermissions() {
@@ -173,7 +178,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
-            // Đồng bộ hướng xoay chuẩn với tư thế đặt điện thoại trên xe
+            // Lấy góc quay thực tế của màn hình nằm ngang trên xe
             val rotation = previewView.display?.rotation ?: Surface.ROTATION_90
 
             val preview = Preview.Builder()
@@ -202,9 +207,15 @@ class MainActivity : AppCompatActivity(), LocationListener {
     @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
     private fun processFrame(imageProxy: ImageProxy) {
         try {
-            val bitmap = imageProxy.toBitmap()
-            if (bitmap != null && ortSession != null && ortEnv != null) {
-                detectVehicles(bitmap, imageProxy.width, imageProxy.height)
+            val rotDegrees = imageProxy.imageInfo.rotationDegrees
+            val rawBmp = imageProxy.toBitmap()
+
+            if (rawBmp != null && ortSession != null && ortEnv != null) {
+                // Xoay ma trận để hình ảnh gửi vào AI luôn thẳng đứng 100%
+                val matrix = Matrix().apply { postRotate(rotDegrees.toFloat()) }
+                val uprightBmp = Bitmap.createBitmap(rawBmp, 0, 0, rawBmp.width, rawBmp.height, matrix, true)
+
+                detectVehicles(uprightBmp)
             }
         } catch (e: Exception) {
         } finally {
@@ -212,7 +223,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
         }
     }
 
-    private fun detectVehicles(bitmap: Bitmap, origW: Int, origH: Int) {
+    private fun detectVehicles(bitmap: Bitmap) {
         val scaled = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
         val floatBuffer = FloatBuffer.allocate(1 * 3 * 640 * 640)
         val pixels = IntArray(640 * 640)
@@ -243,6 +254,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
         for (a in 0 until 8400) {
             var bestScore = 0f
             var bestCls = -1
+
             for ((clsId, _) in realWidths) {
                 val score = raw[4 + clsId][a]
                 if (score > bestScore) {
@@ -251,28 +263,26 @@ class MainActivity : AppCompatActivity(), LocationListener {
                 }
             }
 
-            if (bestScore > 0.40f) {
+            // Tăng độ nhạy lên 0.25 để bắt dính xe cả lúc trời tối/chạng vạng
+            if (bestScore > 0.25f) {
                 val cx = raw[0][a]
                 val cy = raw[1][a]
                 val w = raw[2][a]
                 val h = raw[3][a]
 
-                // Chỉ xét xe ở làn giữa
-                if (cx in 160f..480f) {
-                    val realW = realWidths[bestCls] ?: 1.75f
-                    val dist = (realW * FOCAL_LENGTH) / w
+                val realW = realWidths[bestCls] ?: 1.75f
+                val dist = (realW * FOCAL_LENGTH) / w
 
-                    if (dist < minRawDist) {
-                        minRawDist = dist
-                        leadClass = classNames[bestCls] ?: "CAR"
+                // Tìm chiếc xe ở gần nhất phía trước
+                if (dist < minRawDist && dist > 1.5f) {
+                    minRawDist = dist
+                    leadClass = classNames[bestCls] ?: "CAR"
 
-                        // Map tọa độ 640x640 ra kích thước màn hình
-                        val left = (cx - w / 2f) / 640f * viewW
-                        val top = (cy - h / 2f) / 640f * viewH
-                        val right = (cx + w / 2f) / 640f * viewW
-                        val bottom = (cy + h / 2f) / 640f * viewH
-                        leadBox = RectF(left, top, right, bottom)
-                    }
+                    val left = (cx - w / 2f) / 640f * viewW
+                    val top = (cy - h / 2f) / 640f * viewH
+                    val right = (cx + w / 2f) / 640f * viewW
+                    val bottom = (cy + h / 2f) / 640f * viewH
+                    leadBox = RectF(left, top, right, bottom)
                 }
             }
         }
