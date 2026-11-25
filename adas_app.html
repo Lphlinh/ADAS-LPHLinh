@@ -1,0 +1,274 @@
+﻿<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ADAS FCW - Safe Distance</title>
+    <!-- Thư viện AI TensorFlow.js & COCO-SSD -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #000; color: #fff; overflow: hidden; position: fixed; width: 100vw; height: 100vh; }
+        
+        #video-container { position: relative; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        /* Bảng HUD điều khiển */
+        .hud-panel {
+            position: absolute; top: 12px; left: 12px; right: 12px;
+            background: rgba(15, 20, 25, 0.85); backdrop-filter: blur(8px);
+            border: 2px solid #00ffcc; border-radius: 12px; padding: 12px 16px;
+            box-shadow: 0 4px 20px rgba(0, 255, 204, 0.25); z-index: 10;
+        }
+        .hud-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .hud-title { font-size: 13px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; }
+        .hud-val { font-size: 18px; font-weight: bold; }
+        .speed-val { font-size: 26px; color: #00ffcc; font-weight: 800; }
+        
+        .status-box {
+            text-align: center; padding: 8px; border-radius: 8px; font-size: 16px; font-weight: bold;
+            margin-top: 6px; letter-spacing: 1px; transition: all 0.2s ease;
+        }
+        .status-safe { background: rgba(0, 255, 100, 0.25); border: 2px solid #00ff64; color: #00ff64; }
+        .status-warn { background: rgba(255, 200, 0, 0.3); border: 2px solid #ffc800; color: #ffc800; }
+        .status-danger { background: rgba(255, 30, 30, 0.4); border: 2px solid #ff1e1e; color: #ff3333; animation: pulse 0.5s infinite alternate; }
+
+        @keyframes pulse { from { opacity: 0.7; transform: scale(0.98); } to { opacity: 1; transform: scale(1.02); } }
+
+        /* Nút điều khiển nhanh góc dưới */
+        .bottom-controls {
+            position: absolute; bottom: 20px; left: 12px; right: 12px;
+            display: flex; gap: 8px; z-index: 10;
+        }
+        .btn {
+            flex: 1; padding: 12px; border: none; border-radius: 8px;
+            font-size: 13px; font-weight: bold; color: #fff; cursor: pointer;
+            background: rgba(30, 40, 50, 0.85); border: 1px solid #555;
+        }
+        .btn-active { background: #0077ff; border-color: #3399ff; }
+        .btn-speed { flex: 0.6; background: rgba(50, 50, 60, 0.85); }
+    </style>
+</head>
+<body>
+    <div id="video-container">
+        <video id="webcam" playsinline autoplay muted></video>
+        <canvas id="overlay"></canvas>
+    </div>
+
+    <!-- HUD Thông tin trên kính lái -->
+    <div class="hud-panel" id="hud">
+        <div class="hud-row">
+            <div>
+                <div class="hud-title">TỐC ĐỘ XE CHỦ <span id="gps-status" style="color:#ffaa00;">(MÔ PHỎNG)</span></div>
+                <div class="speed-val"><span id="speed">50</span> <span style="font-size: 15px;">km/h</span></div>
+            </div>
+            <div style="text-align: right;">
+                <div class="hud-title">LUẬT ĐỊNH (TT 31)</div>
+                <div class="hud-val" style="color: #fff;">>= <span id="law-dist">27.8</span> m</div>
+            </div>
+        </div>
+
+        <div class="hud-row" style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 6px;">
+            <div>
+                <div class="hud-title">XE PHÍA TRƯỚC</div>
+                <div class="hud-val" id="lead-vehicle">ĐANG TÌM XE...</div>
+            </div>
+            <div style="text-align: right;">
+                <div class="hud-title">KHOẢNG CÁCH</div>
+                <div class="hud-val" id="current-dist" style="font-size: 24px; color: #00ff64;">-- m</div>
+            </div>
+        </div>
+
+        <div class="status-box status-safe" id="status-card">AN TOÀN</div>
+    </div>
+
+    <!-- Nút điều khiển -->
+    <div class="bottom-controls">
+        <button class="btn btn-speed" onclick="changeSpeed(-10)">-10 km/h</button>
+        <button class="btn btn-speed" onclick="changeSpeed(+10)">+10 km/h</button>
+        <button class="btn" id="btn-rain" onclick="toggleRain()">TRỜI MƯA: TẮT</button>
+    </div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('overlay');
+        const ctx = canvas.getContext('2d');
+
+        let model = null;
+        let egoSpeed = 50;
+        let isRain = false;
+        let isLiveGPS = false;
+        let lastBeepTime = 0;
+
+        // Âm thanh Buzzer
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playBeep(freq, duration) {
+            try {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration / 1000);
+            } catch (e) {}
+        }
+
+        // Bật Camera sau của Samsung S24+
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: false
+                });
+                video.srcObject = stream;
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    detectFrame();
+                };
+            } catch (err) {
+                alert("Không thể mở Camera: Vui lòng cho phép quyền truy cập Camera trong trình duyệt!");
+            }
+        }
+
+        // Đọc chip GPS của Samsung S24+
+        function startGPS() {
+            if ("geolocation" in navigator) {
+                navigator.geolocation.watchPosition(pos => {
+                    if (pos.coords.speed !== null && pos.coords.speed >= 0) {
+                        egoSpeed = Math.round(pos.coords.speed * 3.6);
+                        document.getElementById('speed').innerText = egoSpeed;
+                        document.getElementById('gps-status').innerText = "(GPS S24+)";
+                        document.getElementById('gps-status').style.color = "#00ff64";
+                        isLiveGPS = true;
+                    }
+                }, err => {}, { enableHighAccuracy: true });
+            }
+        }
+
+        // Tính cự ly theo Thông tư 31/2019/TT-BGTVT
+        function getVnLawDistance(speed, rain) {
+            let d = 3.5;
+            if (speed <= 10) d = 3.5;
+            else if (speed <= 60) d = Math.max(5.0, speed * (2.0 / 3.6));
+            else if (speed <= 80) d = 35.0;
+            else if (speed <= 100) d = 55.0;
+            else d = 70.0;
+            if (rain) d *= 1.35;
+            return Math.round(d * 10) / 10;
+        }
+
+        // Nhận diện xe và đo khoảng cách
+        const REAL_WIDTHS = { 'car': 1.75, 'truck': 2.4, 'bus': 2.55, 'motorcycle': 0.75 };
+        const FOCAL_LENGTH = 850; // Tiêu cự chuẩn cho camera sau S24+
+
+        async function detectFrame() {
+            if (!model) return;
+            const predictions = await model.detect(video);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            let leadVehicle = null;
+            let minDistance = 999;
+
+            const lawDist = getVnLawDistance(egoSpeed, isRain);
+            document.getElementById('law-dist').innerText = lawDist;
+
+            predictions.forEach(pred => {
+                const cls = pred.class;
+                if (REAL_WIDTHS[cls]) {
+                    const [x, y, w, h] = pred.bbox;
+                    const realW = REAL_WIDTHS[cls];
+                    const distance = Math.round(((realW * FOCAL_LENGTH) / w) * 10) / 10;
+
+                    // Lọc xe ở giữa làn đường
+                    const centerX = x + w / 2;
+                    if (centerX > canvas.width * 0.25 && centerX < canvas.width * 0.75) {
+                        if (distance < minDistance) {
+                            minDistance = distance;
+                            leadVehicle = { bbox: pred.bbox, cls, distance };
+                        }
+                    }
+
+                    // Vẽ khung xung quanh
+                    ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x, y, w, h);
+                }
+            });
+
+            // Xử lý xe dẫn đầu
+            const statusCard = document.getElementById('status-card');
+            const distText = document.getElementById('current-dist');
+            const leadText = document.getElementById('lead-vehicle');
+
+            if (leadVehicle) {
+                const [lx, ly, lw, lh] = leadVehicle.bbox;
+                distText.innerText = `${leadVehicle.distance} m`;
+                leadText.innerText = leadVehicle.cls.toUpperCase();
+
+                let color = "#00ff64";
+                const now = Date.now();
+
+                if (leadVehicle.distance < 0.7 * lawDist) {
+                    // Mức 3: NGUY HIỂM (Đỏ)
+                    color = "#ff2222";
+                    statusCard.className = "status-box status-danger";
+                    statusCard.innerText = "NGUY HIỂM - PHANH GẤP!";
+                    if (now - lastBeepTime > 300) { playBeep(2200, 180); lastBeepTime = now; }
+                } else if (leadVehicle.distance < lawDist) {
+                    // Mức 2: CẢNH BÁO (Vàng)
+                    color = "#ffc800";
+                    statusCard.className = "status-box status-warn";
+                    statusCard.innerText = "CẢNH BÁO - DƯỚI CỰ LY LUẬT";
+                    if (now - lastBeepTime > 1200) { playBeep(1200, 150); lastBeepTime = now; }
+                } else {
+                    // Mức 1: AN TOÀN (Xanh)
+                    statusCard.className = "status-box status-safe";
+                    statusCard.innerText = "KHOẢNG CÁCH AN TOÀN";
+                }
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 5;
+                ctx.strokeRect(lx, ly, lw, lh);
+                distText.style.color = color;
+            } else {
+                distText.innerText = "-- m";
+                leadText.innerText = "KHÔNG CÓ XE";
+                statusCard.className = "status-box status-safe";
+                statusCard.innerText = "ĐƯỜNG THÔNG THOÁNG";
+            }
+
+            requestAnimationFrame(detectFrame);
+        }
+
+        function changeSpeed(delta) {
+            egoSpeed = Math.max(0, egoSpeed + delta);
+            document.getElementById('speed').innerText = egoSpeed;
+        }
+
+        function toggleRain() {
+            isRain = !isRain;
+            const btn = document.getElementById('btn-rain');
+            btn.innerText = isRain ? "TRỜI MƯA: BẬT (+35%)" : "TRỜI MƯA: TẮT";
+            btn.className = isRain ? "btn btn-active" : "btn";
+        }
+
+        // Tải mô hình AI
+        async function init() {
+            document.getElementById('status-card').innerText = "ĐANG TẢI AI...";
+            model = await cocoSsd.load({ base: 'mobilenet_v2' });
+            document.getElementById('status-card').innerText = "SẴN SÀNG";
+            startCamera();
+            startGPS();
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
