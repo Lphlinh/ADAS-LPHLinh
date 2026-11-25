@@ -1,4 +1,4 @@
-﻿name: Build ADAS APK
+name: Build ADAS APK
 
 on:
   push:

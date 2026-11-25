@@ -1,4 +1,4 @@
-﻿package com.lphlinh.adas
+package com.lphlinh.adas
 
 import android.content.Context
 import android.graphics.Canvas
