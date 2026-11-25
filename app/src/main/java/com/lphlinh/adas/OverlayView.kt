@@ -8,33 +8,49 @@ import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 
-class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
-    private val paint = Paint().apply {
+class OverlayView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : View(context, attrs, defStyleAttr) {
+
+    private val boxPaint = Paint().apply {
         style = Paint.Style.STROKE
-        strokeWidth = 6f
+        strokeWidth = 8f
+    }
+    private val textBgPaint = Paint().apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#CC000000")
     }
     private val textPaint = Paint().apply {
         color = Color.WHITE
-        textSize = 36f
-        style = Paint.Style.FILL
+        textSize = 38f
+        isFakeBoldText = true
     }
+
     private var targetBox: RectF? = null
     private var boxColor: Int = Color.GREEN
-    private var infoText: String = ""
+    private var labelText: String = ""
 
-    fun updateTarget(box: RectF?, color: Int, text: String) {
+    fun updateTarget(box: RectF?, color: Int, label: String) {
         targetBox = box
         boxColor = color
-        infoText = text
+        labelText = label
         postInvalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        targetBox?.let {
-            paint.color = boxColor
-            canvas.drawRect(it, paint)
-            canvas.drawText(infoText, it.left, Math.max(it.top - 10f, 40f), textPaint)
+        targetBox?.let { box ->
+            boxPaint.color = boxColor
+            canvas.drawRect(box, boxPaint)
+
+            if (labelText.isNotEmpty()) {
+                val textWidth = textPaint.measureText(labelText)
+                val topPos = Math.max(box.top - 12f, 45f)
+                canvas.drawRect(box.left, topPos - 40f, box.left + textWidth + 20f, topPos + 10f, textBgPaint)
+                canvas.drawText(labelText, box.left + 10f, topPos, textPaint)
+            }
         }
     }
 }

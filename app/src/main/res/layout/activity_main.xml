@@ -17,9 +17,9 @@
 
     <!-- Bảng HUD thông số góc trên bên trái -->
     <LinearLayout
-        android:layout_width="420dp"
+        android:layout_width="450dp"
         android:layout_height="wrap_content"
-        android:layout_margin="16dp"
+        android:layout_margin="12dp"
         android:background="#CC111822"
         android:orientation="vertical"
         android:padding="12dp"
@@ -30,7 +30,7 @@
             android:id="@+id/tvSpeed"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="TỐC ĐỘ: 0 km/h (GPS Ô TÔ)"
+            android:text="TỐC ĐỘ: 50 km/h (MÔ PHỎNG)"
             android:textColor="#00FFCC"
             android:textSize="18sp"
             android:textStyle="bold" />
@@ -39,9 +39,10 @@
             android:id="@+id/tvLawDist"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="LUẬT ĐỊNH (TT 31): >= 3.5 m"
+            android:layout_marginTop="2dp"
+            android:text="LUẬT ĐỊNH (TT 31): >= 27.8 m"
             android:textColor="#FFFFFF"
-            android:textSize="15sp" />
+            android:textSize="14sp" />
 
         <TextView
             android:id="@+id/tvDistance"
@@ -50,7 +51,7 @@
             android:layout_marginTop="4dp"
             android:text="KHOẢNG CÁCH XE TRƯỚC: -- m"
             android:textColor="#00FF66"
-            android:textSize="18sp"
+            android:textSize="19sp"
             android:textStyle="bold" />
 
         <TextView
@@ -67,27 +68,41 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Nút điều khiển nhanh góc dưới -->
+    <!-- Nút điều khiển nhanh góc dưới bên phải -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_margin="16dp"
+        android:layout_margin="12dp"
         android:orientation="horizontal"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
         <Button
+            android:id="@+id/btnSpeedDown"
+            android:layout_width="65dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:text="-10" />
+
+        <Button
+            android:id="@+id/btnSpeedUp"
+            android:layout_width="65dp"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:text="+10" />
+
+        <Button
             android:id="@+id/btnRain"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="8dp"
+            android:layout_marginEnd="6dp"
             android:text="MƯA: TẮT" />
 
         <Button
             android:id="@+id/btnSwitchCam"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="ĐỔI CAMERA" />
+            android:text="ĐỔI CAM" />
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
