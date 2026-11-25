@@ -2,6 +2,7 @@ package com.lphlinh.adas
 
 import android.Manifest
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
@@ -41,6 +42,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
     private lateinit var btnSpeedDown: Button
     private lateinit var btnSpeedUp: Button
     private lateinit var btnRain: Button
+    private lateinit var btnRotate: Button
     private lateinit var btnSwitchCam: Button
 
     private var toneGen: ToneGenerator? = null
@@ -50,11 +52,15 @@ class MainActivity : AppCompatActivity(), LocationListener {
     private var isRain = false
     private var lastBeepTime = 0L
 
+    // Bộ nhớ lưu góc xoay của Thầy
+    private lateinit var prefs: SharedPreferences
+    private val rotationAngles = intArrayOf(0, 90, 180, 270)
+    private var currentRotationIdx = 0
+
     private val distHistory = ArrayDeque<Float>()
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    // Danh mục phương tiện giao thông COCO
     private val realWidths = mapOf(2 to 1.75f, 3 to 0.75f, 5 to 2.55f, 7 to 2.40f)
     private val classNames = mapOf(2 to "CAR", 3 to "MOTO", 5 to "BUS", 7 to "TRUCK")
     private val FOCAL_LENGTH = 850f
@@ -64,7 +70,11 @@ class MainActivity : AppCompatActivity(), LocationListener {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
 
+        prefs = getSharedPreferences("adas_settings", Context.MODE_PRIVATE)
+        currentRotationIdx = prefs.getInt("camera_rotation_idx", 0)
+
         previewView = findViewById(R.id.previewView)
+        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
 
         overlayView = findViewById(R.id.overlayView)
@@ -75,7 +85,10 @@ class MainActivity : AppCompatActivity(), LocationListener {
         btnSpeedDown = findViewById(R.id.btnSpeedDown)
         btnSpeedUp = findViewById(R.id.btnSpeedUp)
         btnRain = findViewById(R.id.btnRain)
+        btnRotate = findViewById(R.id.btnRotate)
         btnSwitchCam = findViewById(R.id.btnSwitchCam)
+
+        btnRotate.text = "XOAY: ${rotationAngles[currentRotationIdx]}°"
 
         toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 100)
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -102,6 +115,14 @@ class MainActivity : AppCompatActivity(), LocationListener {
             updateLawDistance()
         }
 
+        // Bấm nút XOAY HÌNH: Xoay 90 độ và lưu vào bộ nhớ máy
+        btnRotate.setOnClickListener {
+            currentRotationIdx = (currentRotationIdx + 1) % 4
+            prefs.edit().putInt("camera_rotation_idx", currentRotationIdx).apply()
+            btnRotate.text = "XOAY: ${rotationAngles[currentRotationIdx]}°"
+            startCamera()
+        }
+
         btnSwitchCam.setOnClickListener {
             cameraSelector = if (cameraSelector == CameraSelector.DEFAULT_BACK_CAMERA) {
                 CameraSelector.DEFAULT_FRONT_CAMERA
@@ -112,8 +133,6 @@ class MainActivity : AppCompatActivity(), LocationListener {
         }
 
         updateLawDistance()
-
-        // Đảm bảo View đã tải xong mới bật Camera để góc xoay thẳng đứng 100%
         previewView.post {
             requestPermissions()
         }
@@ -124,7 +143,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
             ortEnv = OrtEnvironment.getEnvironment()
             val modelBytes = assets.open("yolov8n.onnx").readBytes()
             ortSession = ortEnv?.createSession(modelBytes)
-            tvStatus.text = "AI YOLOV8: ĐÃ KÍCH HOẠT"
+            tvStatus.text = "AI YOLOV8: SẴN SÀNG"
         } catch (e: Exception) {
             tvStatus.text = "LỖI TẢI AI: ${e.message}"
         }
@@ -178,17 +197,22 @@ class MainActivity : AppCompatActivity(), LocationListener {
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
-            // Lấy góc quay thực tế của màn hình nằm ngang trên xe
-            val rotation = previewView.display?.rotation ?: Surface.ROTATION_90
+            val targetRotation = when (rotationAngles[currentRotationIdx]) {
+                0 -> Surface.ROTATION_0
+                90 -> Surface.ROTATION_90
+                180 -> Surface.ROTATION_180
+                270 -> Surface.ROTATION_270
+                else -> Surface.ROTATION_0
+            }
 
             val preview = Preview.Builder()
-                .setTargetRotation(rotation)
+                .setTargetRotation(targetRotation)
                 .build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
             val imageAnalysis = ImageAnalysis.Builder()
-                .setTargetRotation(rotation)
+                .setTargetRotation(targetRotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .build()
@@ -211,10 +235,8 @@ class MainActivity : AppCompatActivity(), LocationListener {
             val rawBmp = imageProxy.toBitmap()
 
             if (rawBmp != null && ortSession != null && ortEnv != null) {
-                // Xoay ma trận để hình ảnh gửi vào AI luôn thẳng đứng 100%
                 val matrix = Matrix().apply { postRotate(rotDegrees.toFloat()) }
                 val uprightBmp = Bitmap.createBitmap(rawBmp, 0, 0, rawBmp.width, rawBmp.height, matrix, true)
-
                 detectVehicles(uprightBmp)
             }
         } catch (e: Exception) {
@@ -263,7 +285,6 @@ class MainActivity : AppCompatActivity(), LocationListener {
                 }
             }
 
-            // Tăng độ nhạy lên 0.25 để bắt dính xe cả lúc trời tối/chạng vạng
             if (bestScore > 0.25f) {
                 val cx = raw[0][a]
                 val cy = raw[1][a]
@@ -273,8 +294,7 @@ class MainActivity : AppCompatActivity(), LocationListener {
                 val realW = realWidths[bestCls] ?: 1.75f
                 val dist = (realW * FOCAL_LENGTH) / w
 
-                // Tìm chiếc xe ở gần nhất phía trước
-                if (dist < minRawDist && dist > 1.5f) {
+                if (dist < minRawDist && dist > 1.0f) {
                     minRawDist = dist
                     leadClass = classNames[bestCls] ?: "CAR"
 

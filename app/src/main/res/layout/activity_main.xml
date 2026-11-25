@@ -15,7 +15,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Bảng HUD thông số góc trên bên trái -->
+    <!-- Bảng HUD thông số -->
     <LinearLayout
         android:layout_width="450dp"
         android:layout_height="wrap_content"
@@ -68,7 +68,7 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Nút điều khiển nhanh góc dưới bên phải -->
+    <!-- Nút điều khiển nhanh góc dưới -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
@@ -79,14 +79,14 @@
 
         <Button
             android:id="@+id/btnSpeedDown"
-            android:layout_width="65dp"
+            android:layout_width="60dp"
             android:layout_height="wrap_content"
             android:layout_marginEnd="6dp"
             android:text="-10" />
 
         <Button
             android:id="@+id/btnSpeedUp"
-            android:layout_width="65dp"
+            android:layout_width="60dp"
             android:layout_height="wrap_content"
             android:layout_marginEnd="6dp"
             android:text="+10" />
@@ -97,6 +97,15 @@
             android:layout_height="wrap_content"
             android:layout_marginEnd="6dp"
             android:text="MƯA: TẮT" />
+
+        <!-- Nút XOAY HÌNH BẰNG TAY CỦA THẦY -->
+        <Button
+            android:id="@+id/btnRotate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="6dp"
+            android:backgroundTint="#FF9800"
+            android:text="XOAY HÌNH" />
 
         <Button
             android:id="@+id/btnSwitchCam"
