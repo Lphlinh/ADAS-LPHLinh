@@ -2,10 +2,9 @@ package com.lphlinh.adas
 
 import android.Manifest
 import android.content.Context
-import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.location.Location
@@ -14,10 +13,12 @@ import android.location.LocationManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import android.view.Surface
-import android.view.WindowManager
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -26,101 +27,113 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import ai.onnxruntime.*
 import java.nio.FloatBuffer
-import java.util.*
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.max
+import kotlin.math.min
 
-class MainActivity : AppCompatActivity(), LocationListener {
+class MainActivity : AppCompatActivity() {
 
-    private lateinit var cameraExecutor: ExecutorService
     private lateinit var previewView: PreviewView
     private lateinit var overlayView: OverlayView
     private lateinit var tvSpeed: TextView
-    private lateinit var tvLawDist: TextView
-    private lateinit var tvDistance: TextView
+    private lateinit var tvLawDistance: TextView
     private lateinit var tvStatus: TextView
+    private lateinit var tvDistance: TextView
+
     private lateinit var btnSpeedDown: Button
     private lateinit var btnSpeedUp: Button
     private lateinit var btnRain: Button
     private lateinit var btnRotate: Button
     private lateinit var btnSwitchCam: Button
 
-    private var toneGen: ToneGenerator? = null
+    private lateinit var cameraExecutor: ExecutorService
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var imageAnalysis: ImageAnalysis? = null
     private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-    private var egoSpeedKmh = 50f
-    private var isLiveGPS = false
-    private var isRain = false
-    private var lastBeepTime = 0L
 
-    // Bộ nhớ lưu góc xoay của Thầy
-    private lateinit var prefs: SharedPreferences
-    private val rotationAngles = intArrayOf(0, 90, 180, 270)
-    private var currentRotationIdx = 0
-
-    private val distHistory = ArrayDeque<Float>()
+    // Trí tuệ nhân tạo YOLOv8
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    private val realWidths = mapOf(2 to 1.75f, 3 to 0.75f, 5 to 2.55f, 7 to 2.40f)
-    private val classNames = mapOf(2 to "CAR", 3 to "MOTO", 5 to "BUS", 7 to "TRUCK")
-    private val FOCAL_LENGTH = 850f
+    // Thông số ADAS và Thông tư 31
+    private var currentSpeedKmh = 50f
+    private var isManualSpeed = true
+    private var isRainMode = false
+    private var smoothedDistance = -1f
+
+    // Bù góc xoay thủ công (0: Tự động hoàn toàn theo cảm biến)
+    private var manualOffsetDegrees = 0
+
+    // Âm thanh cảnh báo
+    private var toneGenerator: ToneGenerator? = null
+    private var lastBeepTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_main)
 
-        prefs = getSharedPreferences("adas_settings", Context.MODE_PRIVATE)
-        currentRotationIdx = prefs.getInt("camera_rotation_idx", 0)
-
         previewView = findViewById(R.id.previewView)
-        previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
-
         overlayView = findViewById(R.id.overlayView)
         tvSpeed = findViewById(R.id.tvSpeed)
-        tvLawDist = findViewById(R.id.tvLawDist)
-        tvDistance = findViewById(R.id.tvDistance)
+        tvLawDistance = findViewById(R.id.tvLawDistance)
         tvStatus = findViewById(R.id.tvStatus)
+        tvDistance = findViewById(R.id.tvDistance)
+
         btnSpeedDown = findViewById(R.id.btnSpeedDown)
         btnSpeedUp = findViewById(R.id.btnSpeedUp)
         btnRain = findViewById(R.id.btnRain)
         btnRotate = findViewById(R.id.btnRotate)
         btnSwitchCam = findViewById(R.id.btnSwitchCam)
 
-        btnRotate.text = "XOAY: ${rotationAngles[currentRotationIdx]}°"
-
-        toneGen = ToneGenerator(AudioManager.STREAM_ALARM, 100)
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        loadAIModel()
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+        } catch (e: Exception) {
+            Log.e("ADAS", "Khong the khoi tao ToneGenerator", e)
+        }
 
+        setupButtons()
+        updateHudDisplay(null)
+
+        if (allPermissionsGranted()) {
+            initOnnxModel()
+            startCamera()
+            startGps()
+        } else {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION),
+                1001
+            )
+        }
+    }
+
+    private fun setupButtons() {
         btnSpeedDown.setOnClickListener {
-            egoSpeedKmh = Math.max(0f, egoSpeedKmh - 10f)
-            isLiveGPS = false
-            tvSpeed.text = "TỐC ĐỘ: ${egoSpeedKmh.toInt()} km/h (MÔ PHỎNG)"
-            updateLawDistance()
+            isManualSpeed = true
+            currentSpeedKmh = max(0f, currentSpeedKmh - 10f)
+            updateHudDisplay(null)
         }
 
         btnSpeedUp.setOnClickListener {
-            egoSpeedKmh += 10f
-            isLiveGPS = false
-            tvSpeed.text = "TỐC ĐỘ: ${egoSpeedKmh.toInt()} km/h (MÔ PHỎNG)"
-            updateLawDistance()
+            isManualSpeed = true
+            currentSpeedKmh += 10f
+            updateHudDisplay(null)
         }
 
         btnRain.setOnClickListener {
-            isRain = !isRain
-            btnRain.text = if (isRain) "MƯA: BẬT (+35%)" else "MƯA: TẮT"
-            updateLawDistance()
+            isRainMode = !isRainMode
+            btnRain.text = if (isRainMode) "MƯA: BẬT" else "MƯA: TẮT"
+            btnRain.setBackgroundColor(if (isRainMode) ContextCompat.getColor(this, android.R.color.holo_blue_dark) else ContextCompat.getColor(this, android.R.color.darker_gray))
+            updateHudDisplay(null)
         }
 
-        // Bấm nút XOAY HÌNH: Xoay 90 độ và lưu vào bộ nhớ máy
         btnRotate.setOnClickListener {
-            currentRotationIdx = (currentRotationIdx + 1) % 4
-            prefs.edit().putInt("camera_rotation_idx", currentRotationIdx).apply()
-            btnRotate.text = "XOAY: ${rotationAngles[currentRotationIdx]}°"
-            startCamera()
+            manualOffsetDegrees = (manualOffsetDegrees + 90) % 360
+            btnRotate.text = if (manualOffsetDegrees == 0) "XOAY: TỰ ĐỘNG" else "XOAY: +${manualOffsetDegrees}°"
+            Toast.makeText(this, "Chế độ xoay: ${btnRotate.text}", Toast.LENGTH_SHORT).show()
         }
 
         btnSwitchCam.setOnClickListener {
@@ -131,234 +144,313 @@ class MainActivity : AppCompatActivity(), LocationListener {
             }
             startCamera()
         }
+    }
 
-        updateLawDistance()
-        previewView.post {
-            requestPermissions()
+    private fun getSafeDistanceTT31(speedKmh: Float, isRain: Boolean): Float {
+        val baseDist = when {
+            speedKmh <= 10f -> 3.5f
+            speedKmh <= 60f -> max(5.0f, speedKmh * 2f / 3.6f)
+            speedKmh <= 80f -> 35.0f
+            speedKmh <= 100f -> 55.0f
+            else -> 70.0f
+        }
+        return if (isRain) baseDist * 1.35f else baseDist
+    }
+
+    private fun updateHudDisplay(detectedDist: Float?) {
+        val safeDist = getSafeDistanceTT31(currentSpeedKmh, isRainMode)
+
+        tvSpeed.text = "${currentSpeedKmh.toInt()} km/h ${if (isManualSpeed) "(MÔ PHỎNG)" else "(GPS)"}"
+        tvLawDistance.text = "Luật 31: ≥ ${String.format("%.1f", safeDist)}m${if (isRainMode) " [Mưa]" else ""}"
+
+        if (detectedDist == null || detectedDist <= 0f) {
+            tvDistance.text = "-- m"
+            tvStatus.text = "ĐƯỜNG THOÁNG"
+            tvStatus.setTextColor(ContextCompat.getColor(this, android.R.color.holo_green_light))
+            tvStatus.setBackgroundColor(0x2210B981)
+            return
+        }
+
+        tvDistance.text = "${String.format("%.1f", detectedDist)} m"
+
+        val now = SystemClock.uptimeMillis()
+        if (detectedDist < safeDist * 0.6f || detectedDist < 8.0f) {
+            tvStatus.text = "PHANH GẤP!"
+            tvStatus.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_light))
+            tvStatus.setBackgroundColor(0x44EF4444)
+            if (now - lastBeepTime > 250L) {
+                toneGenerator?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 150)
+                lastBeepTime = now
+            }
+        } else if (detectedDist < safeDist) {
+            tvStatus.text = "CẢNH BÁO!"
+            tvStatus.setTextColor(ContextCompat.getColor(this, android.R.color.holo_orange_light))
+            tvStatus.setBackgroundColor(0x33F59E0B)
+            if (now - lastBeepTime > 750L) {
+                toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 120)
+                lastBeepTime = now
+            }
+        } else {
+            tvStatus.text = "AN TOÀN"
+            tvStatus.setTextColor(ContextCompat.getColor(this, android.R.color.holo_green_light))
+            tvStatus.setBackgroundColor(0x2210B981)
         }
     }
 
-    private fun loadAIModel() {
+    private fun initOnnxModel() {
         try {
             ortEnv = OrtEnvironment.getEnvironment()
             val modelBytes = assets.open("yolov8n.onnx").readBytes()
-            ortSession = ortEnv?.createSession(modelBytes)
-            tvStatus.text = "AI YOLOV8: SẴN SÀNG"
+            ortSession = ortEnv?.createSession(modelBytes, OrtSession.SessionOptions())
+            Log.i("ADAS", "Khoi tao YOLOv8 ONNX thanh cong!")
         } catch (e: Exception) {
-            tvStatus.text = "LỖI TẢI AI: ${e.message}"
+            Log.e("ADAS", "Loi khi tai model YOLOv8", e)
         }
-    }
-
-    private fun requestPermissions() {
-        val permissions = arrayOf(Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION)
-        if (permissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
-            startCamera()
-            startLocation()
-        } else {
-            ActivityCompat.requestPermissions(this, permissions, 101)
-        }
-    }
-
-    private fun startLocation() {
-        try {
-            val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 1f, this)
-        } catch (e: SecurityException) {}
-    }
-
-    override fun onLocationChanged(loc: Location) {
-        if (loc.hasSpeed() && loc.speed >= 0) {
-            egoSpeedKmh = loc.speed * 3.6f
-            isLiveGPS = true
-            tvSpeed.text = "TỐC ĐỘ: ${egoSpeedKmh.toInt()} km/h (GPS LIVE)"
-            updateLawDistance()
-        }
-    }
-
-    private fun getVnLawDistance(speed: Float, rain: Boolean): Float {
-        var d = when {
-            speed <= 10f -> 3.5f
-            speed <= 60f -> Math.max(5f, speed * (2f / 3.6f))
-            speed <= 80f -> 35f
-            speed <= 100f -> 55f
-            else -> 70f
-        }
-        if (rain) d *= 1.35f
-        return Math.round(d * 10f) / 10f
-    }
-
-    private fun updateLawDistance() {
-        val law = getVnLawDistance(egoSpeedKmh, isRain)
-        tvLawDist.text = "LUẬT ĐỊNH (TT 31): >= $law m"
     }
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
+            cameraProvider = cameraProviderFuture.get()
 
-            val targetRotation = when (rotationAngles[currentRotationIdx]) {
-                0 -> Surface.ROTATION_0
-                90 -> Surface.ROTATION_90
-                180 -> Surface.ROTATION_180
-                270 -> Surface.ROTATION_270
-                else -> Surface.ROTATION_0
-            }
+            val displayRotation = previewView.display?.rotation ?: Surface.ROTATION_0
 
             val preview = Preview.Builder()
-                .setTargetRotation(targetRotation)
+                .setTargetRotation(displayRotation)
                 .build().also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            val imageAnalysis = ImageAnalysis.Builder()
-                .setTargetRotation(targetRotation)
+            imageAnalysis = ImageAnalysis.Builder()
+                .setTargetResolution(android.util.Size(1280, 720))
+                .setTargetRotation(displayRotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
-
-            imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                processFrame(imageProxy)
-            }
+                .build().also {
+                    it.setAnalyzer(cameraExecutor) { imageProxy ->
+                        processFrame(imageProxy)
+                    }
+                }
 
             try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
-            } catch (exc: Exception) {}
+                cameraProvider?.unbindAll()
+                cameraProvider?.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
+            } catch (e: Exception) {
+                Log.e("ADAS", "Loi khoi dong camera", e)
+            }
         }, ContextCompat.getMainExecutor(this))
     }
 
-    @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
-    private fun processFrame(imageProxy: ImageProxy) {
-        try {
-            val rotDegrees = imageProxy.imageInfo.rotationDegrees
-            val rawBmp = imageProxy.toBitmap()
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val displayRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+        imageAnalysis?.targetRotation = displayRotation
+    }
 
-            if (rawBmp != null && ortSession != null && ortEnv != null) {
-                val matrix = Matrix().apply { postRotate(rotDegrees.toFloat()) }
-                val uprightBmp = Bitmap.createBitmap(rawBmp, 0, 0, rawBmp.width, rawBmp.height, matrix, true)
-                detectVehicles(uprightBmp)
+    private fun processFrame(imageProxy: ImageProxy) {
+        val session = ortSession ?: run {
+            imageProxy.close()
+            return
+        }
+
+        try {
+            val bitmap = imageProxy.toBitmap()
+            val sensorRotation = imageProxy.imageInfo.rotationDegrees
+            // Tự động giữ góc thẳng đứng theo trọng lực cảm biến
+            val finalRotation = (sensorRotation + manualOffsetDegrees) % 360
+
+            val uprightBitmap = if (finalRotation != 0) {
+                val matrix = Matrix().apply { postRotate(finalRotation.toFloat()) }
+                Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            } else {
+                bitmap
             }
+
+            detectVehicles(uprightBitmap, session)
+
         } catch (e: Exception) {
+            Log.e("ADAS", "Loi xu ly frame AI", e)
         } finally {
             imageProxy.close()
         }
     }
 
-    private fun detectVehicles(bitmap: Bitmap) {
-        val scaled = Bitmap.createScaledBitmap(bitmap, 640, 640, true)
-        val floatBuffer = FloatBuffer.allocate(1 * 3 * 640 * 640)
-        val pixels = IntArray(640 * 640)
-        scaled.getPixels(pixels, 0, 640, 0, 0, 640, 640)
+    private fun detectVehicles(uprightBitmap: Bitmap, session: OrtSession) {
+        val wRot = uprightBitmap.width.toFloat()
+        val hRot = uprightBitmap.height.toFloat()
 
-        for (i in 0 until 640 * 640) {
-            floatBuffer.put(i, ((pixels[i] shr 16) and 0xFF) / 255.0f)
-        }
-        for (i in 0 until 640 * 640) {
-            floatBuffer.put(640 * 640 + i, ((pixels[i] shr 8) and 0xFF) / 255.0f)
-        }
-        for (i in 0 until 640 * 640) {
-            floatBuffer.put(2 * 640 * 640 + i, (pixels[i] and 0xFF) / 255.0f)
-        }
+        // 1. Resize ve 640x640 cho YOLOv8
+        val resized = Bitmap.createScaledBitmap(uprightBitmap, 640, 640, true)
+
+        // 2. Chuan hoa pixel ve float buffer (RGB 0.0 .. 1.0)
+        val pixels = IntArray(640 * 640)
+        resized.getPixels(pixels, 0, 640, 0, 0, 640, 640)
+
+        val floatBuffer = FloatBuffer.allocate(1 * 3 * 640 * 640)
         floatBuffer.rewind()
 
-        val inputTensor = OnnxTensor.createTensor(ortEnv, floatBuffer, longArrayOf(1, 3, 640, 640))
-        val output = ortSession!!.run(Collections.singletonMap("images", inputTensor))
-        val raw = (output[0].value as Array<Array<FloatArray>>)[0] // [84, 8400]
+        val rOffset = 0
+        val gOffset = 640 * 640
+        val bOffset = 2 * 640 * 640
 
-        var leadBox: RectF? = null
-        var leadClass = ""
-        var minRawDist = 999f
+        for (i in pixels.indices) {
+            val p = pixels[i]
+            val r = ((p shr 16) and 0xFF) / 255.0f
+            val g = ((p shr 8) and 0xFF) / 255.0f
+            val b = (p and 0xFF) / 255.0f
 
-        val viewW = overlayView.width.toFloat()
-        val viewH = overlayView.height.toFloat()
+            floatBuffer.put(rOffset + i, r)
+            floatBuffer.put(gOffset + i, g)
+            floatBuffer.put(bOffset + i, b)
+        }
 
-        for (a in 0 until 8400) {
-            var bestScore = 0f
-            var bestCls = -1
+        val inputTensor = OnnxTensor.createTensor(
+            ortEnv,
+            floatBuffer,
+            longArrayOf(1, 3, 640, 640)
+        )
 
-            for ((clsId, _) in realWidths) {
-                val score = raw[4 + clsId][a]
-                if (score > bestScore) {
-                    bestScore = score
-                    bestCls = clsId
+        val output = session.run(mapOf(session.inputNames.iterator().next() to inputTensor))
+        val outputTensor = output[0] as OnnxTensor
+        val outputData = outputTensor.floatBuffer
+
+        // YOLOv8 shape: [1, 84, 8400]
+        val numClasses = 80
+        val numAnchors = 8400
+
+        val candidateBoxes = ArrayList<DetectedBox>()
+        val safeDist = getSafeDistanceTT31(currentSpeedKmh, isRainMode)
+
+        val vW = overlayView.width.toFloat()
+        val vH = overlayView.height.toFloat()
+        val scale = max(vW / wRot, vH / hRot)
+        val dx = (vW - wRot * scale) / 2f
+        val dy = (vH - hRot * scale) / 2f
+
+        val vehicleClasses = setOf(2, 3, 5, 7) // 2: car, 3: moto, 5: bus, 7: truck
+
+        for (i in 0 until numAnchors) {
+            var maxScore = 0f
+            var bestClass = -1
+
+            for (c in vehicleClasses) {
+                val score = outputData.get((4 + c) * numAnchors + i)
+                if (score > maxScore) {
+                    maxScore = score
+                    bestClass = c
                 }
             }
 
-            if (bestScore > 0.25f) {
-                val cx = raw[0][a]
-                val cy = raw[1][a]
-                val w = raw[2][a]
-                val h = raw[3][a]
+            if (maxScore > 0.28f) {
+                val cx = outputData.get(0 * numAnchors + i)
+                val cy = outputData.get(1 * numAnchors + i)
+                val w = outputData.get(2 * numAnchors + i)
+                val h = outputData.get(3 * numAnchors + i)
 
-                val realW = realWidths[bestCls] ?: 1.75f
-                val dist = (realW * FOCAL_LENGTH) / w
+                val x1 = (cx - w / 2f) / 640f
+                val y1 = (cy - h / 2f) / 640f
+                val x2 = (cx + w / 2f) / 640f
+                val y2 = (cy + h / 2f) / 640f
 
-                if (dist < minRawDist && dist > 1.0f) {
-                    minRawDist = dist
-                    leadClass = classNames[bestCls] ?: "CAR"
+                // Chuyen sang toa do man hinh OverlayView
+                val screenRect = RectF(
+                    x1 * wRot * scale + dx,
+                    y1 * hRot * scale + dy,
+                    x2 * wRot * scale + dx,
+                    y2 * hRot * scale + dy
+                )
 
-                    val left = (cx - w / 2f) / 640f * viewW
-                    val top = (cy - h / 2f) / 640f * viewH
-                    val right = (cx + w / 2f) / 640f * viewW
-                    val bottom = (cy + h / 2f) / 640f * viewH
-                    leadBox = RectF(left, top, right, bottom)
+                val realHeight = when (bestClass) {
+                    3 -> 1.2f // Xe máy
+                    5, 7 -> 2.8f // Xe tải / Xe buýt
+                    else -> 1.5f // Ô tô con
+                }
+
+                val label = when (bestClass) {
+                    3 -> "MOTO"
+                    5 -> "BUS"
+                    7 -> "TRUCK"
+                    else -> "OTO"
+                }
+
+                val boxPixelHeight = max(10f, (y2 - y1) * hRot)
+                val focal = 950f // Tieu cu chuan pinhole camera
+                val estDistance = (focal * realHeight) / boxPixelHeight
+
+                if (estDistance in 1.5f..120f) {
+                    candidateBoxes.add(
+                        DetectedBox(
+                            rect = screenRect,
+                            label = label,
+                            distance = estDistance,
+                            isDanger = estDistance < safeDist * 0.6f || estDistance < 8f,
+                            isWarning = estDistance < safeDist
+                        )
+                    )
                 }
             }
+        }
+
+        // Loc khung trung nhau (NMS) va chon xe gan nhat truoc mui xe
+        candidateBoxes.sortBy { it.distance }
+        val finalBoxes = ArrayList<DetectedBox>()
+        for (b in candidateBoxes) {
+            var overlaps = false
+            for (f in finalBoxes) {
+                if (RectF.intersects(b.rect, f.rect)) {
+                    overlaps = true
+                    break
+                }
+            }
+            if (!overlaps) {
+                finalBoxes.add(b)
+            }
+            if (finalBoxes.size >= 5) break
+        }
+
+        // Chon xe gan nhat o lan duong trung tam
+        val closestVehicle = finalBoxes.firstOrNull()
+        val currentDist = closestVehicle?.distance
+
+        if (currentDist != null) {
+            smoothedDistance = if (smoothedDistance <= 0f) currentDist else (0.6f * currentDist + 0.4f * smoothedDistance)
+        } else {
+            smoothedDistance = -1f
         }
 
         runOnUiThread {
-            updateSafetyStatus(leadBox, leadClass, minRawDist)
+            overlayView.setDetections(finalBoxes)
+            updateHudDisplay(if (smoothedDistance > 0f) smoothedDistance else null)
         }
     }
 
-    private fun updateSafetyStatus(box: RectF?, className: String, rawDist: Float) {
-        if (box != null && rawDist < 120f) {
-            if (distHistory.size >= 5) distHistory.removeFirst()
-            distHistory.addLast(rawDist)
-            val smoothDist = Math.round((distHistory.average().toFloat()) * 10f) / 10f
-
-            tvDistance.text = "KHOẢNG CÁCH XE TRƯỚC: $smoothDist m"
-            val lawDist = getVnLawDistance(egoSpeedKmh, isRain)
-            val now = System.currentTimeMillis()
-
-            var color = Color.GREEN
-            var label = "$className: ${smoothDist}m [AN TOÀN]"
-
-            if (smoothDist < 0.7f * lawDist) {
-                color = Color.RED
-                label = "$className: ${smoothDist}m [NGUY HIỂM]"
-                tvStatus.text = "NGUY HIỂM - PHANH GẤP!"
-                tvStatus.setTextColor(Color.RED)
-                tvStatus.setBackgroundColor(Color.parseColor("#44FF0000"))
-                if (now - lastBeepTime > 300) {
-                    toneGen?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 180)
-                    lastBeepTime = now
+    private fun startGps() {
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            locationManager.requestLocationUpdates(
+                LocationManager.GPS_PROVIDER,
+                1000L,
+                1f,
+                object : LocationListener {
+                    override fun onLocationChanged(location: Location) {
+                        if (location.hasSpeed() && location.speed > 0.5f) {
+                            currentSpeedKmh = location.speed * 3.6f
+                            isManualSpeed = false
+                            updateHudDisplay(if (smoothedDistance > 0f) smoothedDistance else null)
+                        }
+                    }
+                    override fun onProviderEnabled(provider: String) {}
+                    override fun onProviderDisabled(provider: String) {}
                 }
-            } else if (smoothDist < lawDist) {
-                color = Color.parseColor("#FFC800")
-                label = "$className: ${smoothDist}m [CẢNH BÁO]"
-                tvStatus.text = "CẢNH BÁO - DƯỚI CỰ LY LUẬT"
-                tvStatus.setTextColor(Color.parseColor("#FFC800"))
-                tvStatus.setBackgroundColor(Color.parseColor("#44FFC800"))
-                if (now - lastBeepTime > 1200) {
-                    toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
-                    lastBeepTime = now
-                }
-            } else {
-                tvStatus.text = "KHOẢNG CÁCH AN TOÀN"
-                tvStatus.setTextColor(Color.GREEN)
-                tvStatus.setBackgroundColor(Color.parseColor("#3300FF66"))
-            }
-
-            overlayView.updateTarget(box, color, label)
-        } else {
-            tvDistance.text = "KHOẢNG CÁCH XE TRƯỚC: -- m"
-            tvStatus.text = "ĐƯỜNG THÔNG THOÁNG"
-            tvStatus.setTextColor(Color.GREEN)
-            tvStatus.setBackgroundColor(Color.parseColor("#3300FF66"))
-            overlayView.updateTarget(null, Color.GREEN, "")
+            )
         }
+    }
+
+    private fun allPermissionsGranted() = arrayOf(
+        Manifest.permission.CAMERA,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    ).all {
+        ContextCompat.checkSelfPermission(baseContext, it) == PackageManager.PERMISSION_GRANTED
     }
 
     override fun onDestroy() {
@@ -366,6 +458,6 @@ class MainActivity : AppCompatActivity(), LocationListener {
         cameraExecutor.shutdown()
         ortSession?.close()
         ortEnv?.close()
-        toneGen?.release()
+        toneGenerator?.release()
     }
 }
