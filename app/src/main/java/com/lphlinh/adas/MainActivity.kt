@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.location.Location
@@ -126,7 +127,7 @@ class MainActivity : AppCompatActivity() {
         btnRain.setOnClickListener {
             isRainMode = !isRainMode
             btnRain.text = if (isRainMode) "MƯA: BẬT" else "MƯA: TẮT"
-            btnRain.setBackgroundColor(if (isRainMode) ContextCompat.getColor(this, android.R.color.holo_blue_dark) else ContextCompat.getColor(this, android.R.color.darker_gray))
+            btnRain.setBackgroundColor(if (isRainMode) Color.parseColor("#1D4ED8") else Color.parseColor("#374151"))
             updateHudDisplay(null)
         }
 
@@ -166,8 +167,8 @@ class MainActivity : AppCompatActivity() {
         if (detectedDist == null || detectedDist <= 0f) {
             tvDistance.text = "-- m"
             tvStatus.text = "ĐƯỜNG THOÁNG"
-            tvStatus.setTextColor(ContextCompat.getColor(this, android.R.color.holo_green_light))
-            tvStatus.setBackgroundColor(0x2210B981)
+            tvStatus.setTextColor(Color.parseColor("#10B981"))
+            tvStatus.setBackgroundColor(Color.parseColor("#2210B981"))
             return
         }
 
@@ -176,24 +177,24 @@ class MainActivity : AppCompatActivity() {
         val now = SystemClock.uptimeMillis()
         if (detectedDist < safeDist * 0.6f || detectedDist < 8.0f) {
             tvStatus.text = "PHANH GẤP!"
-            tvStatus.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_light))
-            tvStatus.setBackgroundColor(0x44EF4444)
+            tvStatus.setTextColor(Color.parseColor("#EF4444"))
+            tvStatus.setBackgroundColor(Color.parseColor("#44EF4444"))
             if (now - lastBeepTime > 250L) {
                 toneGenerator?.startTone(ToneGenerator.TONE_CDMA_EMERGENCY_RINGBACK, 150)
                 lastBeepTime = now
             }
         } else if (detectedDist < safeDist) {
             tvStatus.text = "CẢNH BÁO!"
-            tvStatus.setTextColor(ContextCompat.getColor(this, android.R.color.holo_orange_light))
-            tvStatus.setBackgroundColor(0x33F59E0B)
+            tvStatus.setTextColor(Color.parseColor("#F59E0B"))
+            tvStatus.setBackgroundColor(Color.parseColor("#33F59E0B"))
             if (now - lastBeepTime > 750L) {
                 toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP2, 120)
                 lastBeepTime = now
             }
         } else {
             tvStatus.text = "AN TOÀN"
-            tvStatus.setTextColor(ContextCompat.getColor(this, android.R.color.holo_green_light))
-            tvStatus.setBackgroundColor(0x2210B981)
+            tvStatus.setTextColor(Color.parseColor("#10B981"))
+            tvStatus.setBackgroundColor(Color.parseColor("#2210B981"))
         }
     }
 
@@ -256,7 +257,6 @@ class MainActivity : AppCompatActivity() {
         try {
             val bitmap = imageProxy.toBitmap()
             val sensorRotation = imageProxy.imageInfo.rotationDegrees
-            // Tự động giữ góc thẳng đứng theo trọng lực cảm biến
             val finalRotation = (sensorRotation + manualOffsetDegrees) % 360
 
             val uprightBitmap = if (finalRotation != 0) {
@@ -278,11 +278,10 @@ class MainActivity : AppCompatActivity() {
     private fun detectVehicles(uprightBitmap: Bitmap, session: OrtSession) {
         val wRot = uprightBitmap.width.toFloat()
         val hRot = uprightBitmap.height.toFloat()
+        val isPortrait = hRot > wRot
 
-        // 1. Resize ve 640x640 cho YOLOv8
         val resized = Bitmap.createScaledBitmap(uprightBitmap, 640, 640, true)
 
-        // 2. Chuan hoa pixel ve float buffer (RGB 0.0 .. 1.0)
         val pixels = IntArray(640 * 640)
         resized.getPixels(pixels, 0, 640, 0, 0, 640, 640)
 
@@ -314,10 +313,7 @@ class MainActivity : AppCompatActivity() {
         val outputTensor = output[0] as OnnxTensor
         val outputData = outputTensor.floatBuffer
 
-        // YOLOv8 shape: [1, 84, 8400]
-        val numClasses = 80
         val numAnchors = 8400
-
         val candidateBoxes = ArrayList<DetectedBox>()
         val safeDist = getSafeDistanceTT31(currentSpeedKmh, isRainMode)
 
@@ -352,7 +348,6 @@ class MainActivity : AppCompatActivity() {
                 val x2 = (cx + w / 2f) / 640f
                 val y2 = (cy + h / 2f) / 640f
 
-                // Chuyen sang toa do man hinh OverlayView
                 val screenRect = RectF(
                     x1 * wRot * scale + dx,
                     y1 * hRot * scale + dy,
@@ -362,8 +357,8 @@ class MainActivity : AppCompatActivity() {
 
                 val realHeight = when (bestClass) {
                     3 -> 1.2f // Xe máy
-                    5, 7 -> 2.8f // Xe tải / Xe buýt
-                    else -> 1.5f // Ô tô con
+                    5, 7 -> 2.8f // Xe tải / Buýt
+                    else -> 1.5f // Ô tô
                 }
 
                 val label = when (bestClass) {
@@ -374,7 +369,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 val boxPixelHeight = max(10f, (y2 - y1) * hRot)
-                val focal = 950f // Tieu cu chuan pinhole camera
+                val focal = if (isPortrait) 900f else 650f
                 val estDistance = (focal * realHeight) / boxPixelHeight
 
                 if (estDistance in 1.5f..120f) {
@@ -391,7 +386,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Loc khung trung nhau (NMS) va chon xe gan nhat truoc mui xe
         candidateBoxes.sortBy { it.distance }
         val finalBoxes = ArrayList<DetectedBox>()
         for (b in candidateBoxes) {
@@ -408,7 +402,6 @@ class MainActivity : AppCompatActivity() {
             if (finalBoxes.size >= 5) break
         }
 
-        // Chon xe gan nhat o lan duong trung tam
         val closestVehicle = finalBoxes.firstOrNull()
         val currentDist = closestVehicle?.distance
 
