@@ -53,20 +53,15 @@ class MainActivity : AppCompatActivity() {
     private var imageAnalysis: ImageAnalysis? = null
     private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-    // Trí tuệ nhân tạo YOLOv8
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
-    // Thông số ADAS và Thông tư 31
     private var currentSpeedKmh = 50f
     private var isManualSpeed = true
     private var isRainMode = false
     private var smoothedDistance = -1f
-
-    // Bù góc xoay thủ công (0: Tự động hoàn toàn theo cảm biến)
     private var manualOffsetDegrees = 0
 
-    // Âm thanh cảnh báo
     private var toneGenerator: ToneGenerator? = null
     private var lastBeepTime = 0L
 
