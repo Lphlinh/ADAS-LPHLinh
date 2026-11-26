@@ -18,22 +18,30 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up JDK 17
+    - name: Set up JDK 17 voi Gradle cache
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
-
-    - name: Setup Gradle 8.5
-      uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: '8.5'
+        cache: 'gradle'
 
     - name: Set Android SDK local properties
       run: echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-    - name: Build Debug APK
-      run: gradle assembleDebug --no-daemon --stacktrace
+    - name: Tao Gradle Wrapper 8.5
+      run: gradle wrapper --gradle-version=8.5 --distribution-type=bin
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
+
+    - name: Build Debug APK (co retry khi bi 429)
+      run: |
+        for i in 1 2 3; do
+          echo "=== Lan thu $i ==="
+          ./gradlew assembleDebug --no-daemon --build-cache --stacktrace && break
+          echo "Loi lan $i, cho 30 giay roi thu lai..."
+          sleep 30
+        done
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
