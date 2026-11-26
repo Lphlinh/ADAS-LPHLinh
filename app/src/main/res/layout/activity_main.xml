@@ -15,102 +15,128 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Bảng HUD thông số -->
+    <!-- THANH THÔNG SỐ ĐỈNH MÀN HÌNH SIÊU MỎNG (KHÔNG CHE XE PHÍA TRƯỚC) -->
     <LinearLayout
-        android:layout_width="450dp"
+        android:id="@+id/topBar"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_margin="12dp"
-        android:background="#CC111822"
-        android:orientation="vertical"
-        android:padding="12dp"
+        android:background="#88111822"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:gravity="center_vertical"
+        app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent">
+        app:layout_constraintEnd_toEndOf="parent">
 
-        <TextView
-            android:id="@+id/tvSpeed"
-            android:layout_width="wrap_content"
+        <!-- Cụm 1: Tốc độ xe & Cự ly luật định -->
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:text="TỐC ĐỘ: 50 km/h (MÔ PHỎNG)"
-            android:textColor="#00FFCC"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:layout_weight="1"
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tvLawDist"
-            android:layout_width="wrap_content"
+            <TextView
+                android:id="@+id/tvSpeed"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="50 km/h (MÔ PHỎNG)"
+                android:textColor="#00FFCC"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvLawDist"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Luật định: >= 27.8 m"
+                android:textColor="#DDDDDD"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- Cụm 2: Khoảng cách xe trước nổi bật -->
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="LUẬT ĐỊNH (TT 31): >= 27.8 m"
-            android:textColor="#FFFFFF"
-            android:textSize="14sp" />
+            android:layout_weight="1.2"
+            android:gravity="center"
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tvDistance"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="KHOẢNG CÁCH XE TRƯỚC: -- m"
-            android:textColor="#00FF66"
-            android:textSize="19sp"
-            android:textStyle="bold" />
+            <TextView
+                android:id="@+id/tvDistance"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="KHOẢNG CÁCH: -- m"
+                android:textColor="#00FF66"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
+        <!-- Cụm 3: Trạng thái an toàn dạng huy hiệu gọn gàng -->
         <TextView
             android:id="@+id/tvStatus"
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
             android:background="#3300FF66"
-            android:gravity="center"
-            android:padding="6dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
             android:text="AN TOÀN"
             android:textColor="#00FF66"
-            android:textSize="16sp"
+            android:textSize="14sp"
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- Nút điều khiển nhanh góc dưới -->
+    <!-- HÀNG NÚT BẤM SÁT ĐÁY MÀN HÌNH THANH MẢNH -->
     <LinearLayout
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_margin="12dp"
         android:orientation="horizontal"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent">
+        android:padding="8dp"
+        android:gravity="end|center_vertical"
+        app:layout_constraintBottom_toBottomOf="parent">
 
         <Button
             android:id="@+id/btnSpeedDown"
-            android:layout_width="60dp"
-            android:layout_height="wrap_content"
+            android:layout_width="55dp"
+            android:layout_height="38dp"
             android:layout_marginEnd="6dp"
+            android:textSize="11sp"
             android:text="-10" />
 
         <Button
             android:id="@+id/btnSpeedUp"
-            android:layout_width="60dp"
-            android:layout_height="wrap_content"
+            android:layout_width="55dp"
+            android:layout_height="38dp"
             android:layout_marginEnd="6dp"
+            android:textSize="11sp"
             android:text="+10" />
 
         <Button
             android:id="@+id/btnRain"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="38dp"
             android:layout_marginEnd="6dp"
+            android:textSize="11sp"
             android:text="MƯA: TẮT" />
 
-        <!-- Nút XOAY HÌNH BẰNG TAY CỦA THẦY -->
         <Button
             android:id="@+id/btnRotate"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="38dp"
             android:layout_marginEnd="6dp"
             android:backgroundTint="#FF9800"
-            android:text="XOAY HÌNH" />
+            android:textSize="11sp"
+            android:text="XOAY" />
 
         <Button
             android:id="@+id/btnSwitchCam"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="38dp"
+            android:textSize="11sp"
             android:text="ĐỔI CAM" />
     </LinearLayout>
 
